@@ -348,8 +348,9 @@ function buildDocs(){
     .on("mouseleave",()=>{ docNode.style("opacity",1); docLink.attr("stroke","#6f86ab").attr("stroke-opacity",.7); hideTip(); })
     .on("click",(e,d)=>detailDoc(d));
   sim=d3.forceSimulation(nodes)
+    .alphaDecay(nodes.length>1500?0.045:0.0228)
     .force("link",d3.forceLink(links).id(d=>d.id).distance(d=>36+(1-d.weight)*120).strength(d=>.15+d.weight*.55))
-    .force("charge",d3.forceManyBody().strength(-130)).force("center",d3.forceCenter(W/2,H/2)).force("collide",d3.forceCollide().radius(d=>d.r+3))
+    .force("charge",d3.forceManyBody().strength(nodes.length>1500?-60:-130).theta(0.9).distanceMax(nodes.length>1500?420:Infinity)).force("center",d3.forceCenter(W/2,H/2)).force("collide",d3.forceCollide().radius(d=>d.r+3))
     .on("tick",()=>{ docLink.attr("x1",l=>l.source.x).attr("y1",l=>l.source.y).attr("x2",l=>l.target.x).attr("y2",l=>l.target.y);
       docNode.attr("transform",d=>`translate(${d.x},${d.y})`); });
   recolorDocs();
@@ -541,7 +542,7 @@ const EMBED_ID = "Xenova/all-MiniLM-L6-v2";          // must match the notebook'
 const HAS_GPU = !!navigator.gpu;
 const SYS = "You are SENWEB, a cellular-senescence research assistant. Answer ONLY using the numbered SOURCES the user provides. Cite every factual claim inline with its bracketed id, e.g. [d0007]. If the sources do not contain enough information, reply exactly: \"The corpus doesn't contain enough evidence to answer that.\" Write a clear, synthesized summary that directly answers the question by integrating the sources — do not merely list them. Be concise and precise. Never invent citations or facts.";
 
-let chunks=null, vecs=null, dim=0, embedder=null, engine=null, llmReady=false, indexOK=false, busy=false;
+let chunks=null, vecs=null, dim=0, isInt8=false, vscale=1, embedder=null, engine=null, llmReady=false, indexOK=false, busy=false;
 const $=id=>document.getElementById(id);
 const log=$("chatlog");
 function setStatus(t){ $("chatstatus").textContent=t; }
@@ -558,7 +559,10 @@ async function loadIndex(){
     const [cj,vb]=await Promise.all([
       fetch("rag_chunks.json").then(r=>{if(!r.ok)throw 0; return r.json();}),
       fetch("rag_vectors.bin").then(r=>{if(!r.ok)throw 0; return r.arrayBuffer();})]);
-    chunks=cj.chunks; dim=cj.dim; vecs=new Float32Array(vb); indexOK=true;
+    chunks=cj.chunks; dim=cj.dim;
+    if((cj.dtype||"float32")==="int8"){ vecs=new Int8Array(vb); vscale=cj.scale||127; isInt8=true; }
+    else { vecs=new Float32Array(vb); vscale=1; isInt8=false; }
+    indexOK=true;
     setStatus(`${chunks.length} passages`);
     addNote(`Indexed ${chunks.length} passages. Answers are grounded in the corpus and cite paper ids — click a citation to find it in the graph.`);
     if(!HAS_GPU) addNote("This browser has no WebGPU, so retrieval works but synthesized AI answers are unavailable. Chrome or Edge enables them.");
@@ -568,7 +572,7 @@ async function ensureEmbedder(){ if(embedder) return; setStatus("loading retriev
   embedder=await pipeline("feature-extraction",EMBED_ID,{device:HAS_GPU?"webgpu":"wasm"}); setStatus(`${chunks.length} passages`); }
 async function embed(text){ const out=await embedder([text],{pooling:"mean",normalize:true}); return out.tolist()[0]; }
 function topK(q,k){ const n=chunks.length, scores=new Float64Array(n);
-  for(let i=0;i<n;i++){ let s=0; const off=i*dim; for(let d=0;d<dim;d++) s+=q[d]*vecs[off+d]; scores[i]=s; }
+  for(let i=0;i<n;i++){ let s=0; const off=i*dim; for(let d=0;d<dim;d++) s+=q[d]*vecs[off+d]; scores[i]= isInt8 ? s/vscale : s; }
   return Array.from({length:n},(_,i)=>i).sort((a,b)=>scores[b]-scores[a]).slice(0,k).map(i=>Object.assign({score:scores[i]},chunks[i])); }
 function renderSources(host,top){ host.innerHTML="";
   const seen=new Set();
